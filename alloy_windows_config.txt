@@ -1,0 +1,298 @@
+// Grafana Alloy Configuration for Windows VMs
+// Collects system metrics and forwards to OpenTelemetry Collector
+
+// =====================================================
+// LOGGING CONFIGURATION
+// =====================================================
+logging {
+	level  = "info"
+	format = "logfmt"
+	
+	// Log to file for troubleshooting
+	write_to = [
+		{
+			path = "C:\\ProgramData\\Grafana\\Alloy\\logs\\alloy.log"
+			max_size = "10MB"
+			max_backups = 5
+		}
+	]
+}
+
+// =====================================================
+// WINDOWS PERFORMANCE COUNTERS - CPU METRICS
+// =====================================================
+prometheus.exporter.windows "cpu_metrics" {
+	enabled_collectors = ["cpu", "cpu_info"]
+	
+	// CPU performance counters
+	perflib {
+		objects = [
+			{
+				object = "Processor"
+				instances = ["*"]
+				counters = [
+					"% Processor Time",
+					"% User Time", 
+					"% Privileged Time",
+					"% Interrupt Time",
+					"% DPC Time"
+				]
+			},
+			{
+				object = "System"
+				counters = [
+					"Processor Queue Length",
+					"Context Switches/sec"
+				]
+			}
+		]
+	}
+}
+
+// =====================================================
+// WINDOWS PERFORMANCE COUNTERS - MEMORY METRICS
+// =====================================================
+prometheus.exporter.windows "memory_metrics" {
+	enabled_collectors = ["memory"]
+	
+	perflib {
+		objects = [
+			{
+				object = "Memory"
+				counters = [
+					"Available Bytes",
+					"Committed Bytes",
+					"Cache Bytes",
+					"Pool Paged Bytes",
+					"Pool Nonpaged Bytes",
+					"Pages/sec",
+					"Page Faults/sec"
+				]
+			}
+		]
+	}
+}
+
+// =====================================================
+// WINDOWS PERFORMANCE COUNTERS - DISK METRICS
+// =====================================================
+prometheus.exporter.windows "disk_metrics" {
+	enabled_collectors = ["logical_disk", "physical_disk"]
+	
+	perflib {
+		objects = [
+			{
+				object = "LogicalDisk"
+				instances = ["*"]
+				counters = [
+					"% Free Space",
+					"Free Megabytes",
+					"Disk Read Bytes/sec",
+					"Disk Write Bytes/sec",
+					"Disk Reads/sec",
+					"Disk Writes/sec",
+					"Avg. Disk Queue Length",
+					"% Disk Time"
+				]
+			},
+			{
+				object = "PhysicalDisk"
+				instances = ["*"]
+				counters = [
+					"Disk Read Bytes/sec",
+					"Disk Write Bytes/sec",
+					"Avg. Disk sec/Read",
+					"Avg. Disk sec/Write"
+				]
+			}
+		]
+	}
+}
+
+// =====================================================
+// WINDOWS PERFORMANCE COUNTERS - NETWORK METRICS
+// =====================================================
+prometheus.exporter.windows "network_metrics" {
+	enabled_collectors = ["net"]
+	
+	perflib {
+		objects = [
+			{
+				object = "Network Interface"
+				instances = ["*"]
+				counters = [
+					"Bytes Received/sec",
+					"Bytes Sent/sec",
+					"Packets Received/sec",
+					"Packets Sent/sec",
+					"Packets Received Errors",
+					"Packets Outbound Errors",
+					"Current Bandwidth"
+				]
+			}
+		]
+	}
+}
+
+// =====================================================
+// ADDITIONAL SYSTEM METRICS
+// =====================================================
+prometheus.exporter.windows "system_metrics" {
+	enabled_collectors = ["os", "computer_system", "time"]
+	
+	perflib {
+		objects = [
+			{
+				object = "System"
+				counters = [
+					"System Up Time",
+					"Threads",
+					"Processes"
+				]
+			}
+		]
+	}
+}
+
+// =====================================================
+// METRIC SCRAPING AND LABELING
+// =====================================================
+prometheus.scrape "windows_system_metrics" {
+	targets = concat(
+		prometheus.exporter.windows.cpu_metrics.targets,
+		prometheus.exporter.windows.memory_metrics.targets,
+		prometheus.exporter.windows.disk_metrics.targets,
+		prometheus.exporter.windows.network_metrics.targets,
+		prometheus.exporter.windows.system_metrics.targets
+	)
+	
+	forward_to = [prometheus.relabel.add_labels.receiver]
+	
+	// Scrape configuration
+	scrape_interval = "30s"
+	scrape_timeout  = "10s"
+	
+	// Resource limits
+	sample_limit = 10000
+	target_limit = 100
+}
+
+// =====================================================
+// METRIC LABELING FOR VM IDENTIFICATION
+// =====================================================
+prometheus.relabel "add_labels" {
+	forward_to = [otelcol.receiver.prometheus.default.receiver]
+	
+	rule {
+		source_labels = ["__address__"]
+		target_label  = "instance"
+	}
+	
+	rule {
+		target_label = "job"
+		replacement  = "windows-system-metrics"
+	}
+	
+	rule {
+		target_label = "environment"
+		replacement  = "production"  // Adjust as needed
+	}
+	
+	rule {
+		target_label = "platform"
+		replacement  = "windows"
+	}
+	
+	// Add hostname from environment variable
+	rule {
+		target_label = "hostname"
+		replacement  = env("COMPUTERNAME")
+	}
+	
+	// Add VM-specific labels if available
+	rule {
+		target_label = "hypervisor"
+		replacement  = "hyperv"
+	}
+}
+
+// =====================================================
+// OPENTELEMETRY RECEIVER
+// =====================================================
+otelcol.receiver.prometheus "default" {
+	output {
+		metrics = [otelcol.processor.batch.default.input]
+	}
+}
+
+// =====================================================
+// OPENTELEMETRY BATCH PROCESSOR
+// =====================================================
+otelcol.processor.batch "default" {
+	// Batch configuration for efficiency
+	send_batch_size = 1024
+	timeout         = "5s"
+	send_batch_max_size = 2048
+	
+	output {
+		metrics = [otelcol.exporter.otlp.default.input]
+	}
+}
+
+// =====================================================
+// OPENTELEMETRY EXPORTER TO COLLECTOR
+// =====================================================
+otelcol.exporter.otlp "default" {
+	client {
+		endpoint = "http://your-otel-collector:4317"  // Update with your OTLP endpoint
+		
+		// TLS configuration if needed
+		// tls {
+		//   insecure = false
+		//   cert_file = "path/to/cert.pem"
+		//   key_file = "path/to/key.pem"
+		// }
+		
+		// Authentication if required
+		// headers = {
+		//   "authorization" = "Bearer your-token"
+		// }
+		
+		// Compression
+		compression = "gzip"
+		
+		// Timeout and retry configuration
+		timeout = "30s"
+		
+		// Retry configuration
+		retry_on_failure {
+			enabled         = true
+			initial_interval = "5s"
+			max_interval    = "30s"
+			max_elapsed_time = "300s"
+		}
+		
+		// Queue configuration for reliability
+		sending_queue {
+			enabled      = true
+			num_consumers = 10
+			queue_size   = 1000
+		}
+	}
+}
+
+// =====================================================
+// HEALTH CHECK ENDPOINT
+// =====================================================
+prometheus.exporter.self "alloy_metrics" {
+	// Enable self-monitoring
+}
+
+prometheus.scrape "alloy_self" {
+	targets    = prometheus.exporter.self.alloy_metrics.targets
+	forward_to = [otelcol.receiver.prometheus.default.receiver]
+	
+	scrape_interval = "60s"
+	
+	job_name = "alloy-self-monitoring"
+}
