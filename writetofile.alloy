@@ -1,0 +1,20 @@
+// Debug pipeline - add this to see everything
+otelcol.exporter.debug "pipeline_debug" {
+    verbosity = "detailed"
+}
+
+otelcol.exporter.file "raw_output" {
+    path = "/tmp/alloy-debug.jsonl" 
+    format = "json"
+}
+
+// Wire debug outputs to your main pipeline
+otelcol.processor.batch "default" {
+    output {
+        metrics = [
+            otelcol.exporter.otlphttp.grafana_cloud.input,  // Production
+            otelcol.exporter.debug.pipeline_debug.input,    // Console debug
+            otelcol.exporter.file.raw_output.input,         // File debug
+        ]
+    }
+}
