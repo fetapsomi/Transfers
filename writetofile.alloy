@@ -4,7 +4,7 @@ otelcol.exporter.debug "pipeline_debug" {
 }
 
 otelcol.exporter.file "raw_output" {
-    path = "/tmp/alloy-debug.jsonl" 
+    path = "c:\temp\alloy-debug.jsonl" 
     format = "json"
 }
 
